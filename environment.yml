@@ -1,0 +1,29 @@
+name: dl-youtube
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Python
+  - python=3.12
+
+  # PyTorch с CUDA
+  - pytorch>=2.4
+  - pytorch-cuda=12.4
+  - torchaudio
+
+  # Базовые зависимости
+  - ffmpeg
+  - numpy
+  - libsndfile  # для soundfile
+
+  # Pip пакеты
+  - pip
+  - pip:
+      - yt-dlp>=2024.0.0
+      - openai-whisper>=20240930
+      - openai>=1.0.0
+      - soundfile>=0.12.0
+      - git+https://github.com/QwenLM/Qwen3-TTS.git

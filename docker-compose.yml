@@ -1,0 +1,23 @@
+services:
+  tts:
+    build:
+      context: .
+      dockerfile: Dockerfile.tts
+    entrypoint: ["python"]
+    command: ["/app/vllm_tts.py"]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - ./downloads:/app/downloads
+      - ./vllm_tts.py:/app/vllm_tts.py
+      - ./qwen3_tts_stage.yaml:/app/qwen3_tts_stage.yaml
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    working_dir: /app
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

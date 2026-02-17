@@ -1,0 +1,8 @@
+downloads/
+.venv/
+.env
+__pycache__/
+*.pyc
+nul
+tts_output.log
+transcript.json
