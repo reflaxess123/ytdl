@@ -70,6 +70,126 @@ def list_videos(url: str, output_dir: str = "./downloads", proxy: str = None):
     print(f"\n✅ Сохранено {len(rows)} видео в {csv_path}")
 
 
+def srt_to_text(srt_path: Path, chunk_minutes: int = 5) -> str:
+    """Конвертирует SRT в чистый текст с разбивкой по интервалам"""
+    import re
+
+    content = srt_path.read_text(encoding='utf-8', errors='replace')
+
+    entries = []
+    for block in re.split(r'\n\s*\n', content.strip()):
+        lines = block.strip().split('\n')
+        if len(lines) < 3:
+            continue
+        # Парсим таймкод: 00:01:23,456 --> 00:01:25,789
+        tc_match = re.match(r'(\d{2}):(\d{2}):(\d{2})', lines[1])
+        if not tc_match:
+            continue
+        h, m, s = int(tc_match.group(1)), int(tc_match.group(2)), int(tc_match.group(3))
+        seconds = h * 3600 + m * 60 + s
+        text = ' '.join(lines[2:]).strip()
+        # Убираем HTML-теги и дубликаты от YouTube auto-subs
+        text = re.sub(r'<[^>]+>', '', text)
+        if text:
+            entries.append((seconds, text))
+
+    if not entries:
+        return ''
+
+    # Дедупликация (YouTube авто-субтитры часто дублируют строки)
+    seen = set()
+    unique = []
+    for sec, text in entries:
+        if text not in seen:
+            seen.add(text)
+            unique.append((sec, text))
+
+    # Разбиваем по chunk_minutes-минутным интервалам
+    chunk_sec = chunk_minutes * 60
+    chunks = []
+    current_chunk = []
+    current_boundary = chunk_sec
+
+    for sec, text in unique:
+        if sec >= current_boundary and current_chunk:
+            chunks.append((current_boundary - chunk_sec, current_chunk))
+            current_chunk = []
+            current_boundary = (sec // chunk_sec + 1) * chunk_sec
+        current_chunk.append(text)
+
+    if current_chunk:
+        chunks.append((current_boundary - chunk_sec, current_chunk))
+
+    # Форматируем
+    parts = []
+    for start_sec, texts in chunks:
+        h, m = start_sec // 3600, (start_sec % 3600) // 60
+        label = f"[{h:02d}:{m:02d}]" if h > 0 else f"[{m:02d}:00]"
+        parts.append(f"{label}\n{' '.join(texts)}")
+
+    return '\n\n'.join(parts)
+
+
+def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, subs_lang: str = "ru", chunk_minutes: int = 5):
+    """Скачивает субтитры и конвертирует в чистый текст"""
+    output_path = Path(output_dir)
+    text_path = output_path / 'out-text'
+    text_path.mkdir(parents=True, exist_ok=True)
+
+    # Сначала скачиваем SRT в temp
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        ydl_opts = {
+            'outtmpl': str(tmp / '%(playlist_index|)s%(playlist_index&. |)s%(title)s.%(ext)s'),
+            'quiet': False,
+            'no_warnings': True,
+            'ignoreerrors': True,
+            'sleep_interval': 3,
+            'max_sleep_interval': 6,
+            'skip_download': True,
+            'writeautomaticsub': True,
+            'writesubtitles': True,
+            'subtitleslangs': [subs_lang],
+            'subtitlesformat': 'srt',
+            'postprocessors': [{'key': 'FFmpegSubtitlesConvertor', 'format': 'srt'}],
+            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+        }
+        if proxy:
+            ydl_opts['proxy'] = proxy
+
+        print(f"📝 Скачиваю субтитры и конвертирую в текст...")
+        print(f"🔗 URL: {url}")
+        if proxy:
+            print(f"🌐 Прокси: {proxy}")
+        print(f"📁 Сохранение в: {text_path.absolute()}\n")
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+
+        # Конвертируем все скачанные SRT в текст
+        srt_files = sorted(tmp.glob(f'*.{subs_lang}.srt'))
+        if not srt_files:
+            print("⚠️  Субтитры не найдены")
+            return
+
+        for srt_file in srt_files:
+            # Имя без языкового суффикса
+            name = srt_file.stem
+            if name.endswith(f'.{subs_lang}'):
+                name = name[:-len(f'.{subs_lang}')]
+            txt_file = text_path / f"{name}.txt"
+
+            text = srt_to_text(srt_file, chunk_minutes)
+            if text:
+                txt_file.write_text(text, encoding='utf-8')
+                print(f"  ✅ {txt_file.name}")
+            else:
+                print(f"  ⚠️  Пустые субтитры: {srt_file.name}")
+
+    print(f"\n✅ Тексты сохранены в {text_path}")
+
+
 def download_video(url: str, quality: str = "1080", output_dir: str = "./downloads", mp3: bool = False, proxy: str = None, cookies_browser: str = None, subs: bool = False, subs_lang: str = "ru"):
     """
     Скачивает видео с YouTube в указанном качестве
@@ -194,6 +314,8 @@ def main():
   uv run python download.py URL --subs --subs-lang en --ru   # субтитры (en)
   uv run python download.py @CHANNEL --subs --ru             # субтитры всего канала
   uv run python download.py @CHANNEL --list --ru             # список видео в CSV
+  uv run python download.py URL --text --ru                  # субтитры -> текст
+  uv run python download.py URL1 URL2 --text --ru            # несколько URL сразу
 
 URL может быть видео, плейлистом или каналом:
   https://www.youtube.com/watch?v=VIDEO_ID
@@ -261,16 +383,42 @@ URL может быть видео, плейлистом или каналом:
         help='Сохранить список видео канала/плейлиста в CSV (название, ссылка)'
     )
 
+    parser.add_argument(
+        '--text',
+        action='store_true',
+        help='Скачать субтитры и конвертировать в чистый текст (out-text/*.txt)'
+    )
+
+    parser.add_argument(
+        '--chunk',
+        type=int,
+        default=5,
+        help='Размер блока текста в минутах для --text (по умолчанию: 5)'
+    )
+
+    parser.add_argument(
+        'extra_urls',
+        nargs='*',
+        help='Дополнительные URL для пакетной обработки'
+    )
+
     args = parser.parse_args()
 
     proxy = args.proxy
     if args.ru:
         proxy = DEFAULT_PROXY
 
+    urls = [args.url] + (args.extra_urls or [])
+
     if args.list:
-        list_videos(args.url, args.output, proxy)
+        for u in urls:
+            list_videos(u, args.output, proxy)
+    elif args.text:
+        for u in urls:
+            download_text(u, args.output, proxy, args.subs_lang, args.chunk)
     else:
-        download_video(args.url, args.quality, args.output, args.mp3, proxy, args.cookies, args.subs, args.subs_lang)
+        for u in urls:
+            download_video(u, args.quality, args.output, args.mp3, proxy, args.cookies, args.subs, args.subs_lang)
 
 
 if __name__ == "__main__":
