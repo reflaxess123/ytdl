@@ -1,26 +1,27 @@
-# YouTube Video Downloader & Dubber
+# YouTube Downloader
 
-Скачивание видео с YouTube + автоматическое дублирование на русский язык.
+Скачивание видео, аудио, субтитров с YouTube. Поддержка плейлистов, каналов, прокси для РФ.
+
+## Возможности
+
+- **Видео** — скачивание в 720p / 1080p (MP4)
+- **Аудио** — извлечение в MP3 (64 kbps, минимальный размер для транскрипции)
+- **Субтитры** — скачивание автоматических и ручных субтитров в `.srt`
+- **Список видео** — парсинг канала/плейлиста в CSV (название + ссылка)
+- **Плейлисты и каналы** — пакетное скачивание с нумерацией и подпапками
+- **Прокси** — встроенная поддержка для РФ (флаг `--ru`), HTTP и SOCKS5
+- **Кэш** — `.archive.txt` пропускает уже скачанные видео при повторном запуске
+- **Rate limit защита** — задержка 3-6 сек между запросами
 
 ## Установка
 
-### Conda (рекомендуется для дублирования)
-
 ```bash
-# Создаём окружение с PyTorch CUDA
-conda env create -f environment.yml
+# Через uv (рекомендуется)
+uv run python download.py URL
 
-# Активируем
-conda activate dl-youtube
-
-# Опционально: FlashAttention для ускорения TTS
-pip install flash-attn --no-build-isolation
-```
-
-### Только скачивание (без дублирования)
-
-```bash
+# Или вручную
 pip install yt-dlp
+python download.py URL
 ```
 
 ## Скачивание видео
@@ -35,21 +36,30 @@ python download.py URL -q 720
 # В свою папку
 python download.py URL -o ./my_videos
 
-# Только аудио в MP3
-python download.py URL --mp3
-
-# Через прокси для РФ (YouTube заблокирован, см. настройку ниже)
+# Через прокси для РФ
 python download.py URL --ru
-python download.py URL --mp3 --ru
 
 # Свой прокси
 python download.py URL -p http://ip:port
 python download.py URL -p socks5://ip:port
 ```
 
+## Скачивание аудио
+
+```bash
+# MP3 одного видео
+python download.py URL --mp3
+
+# MP3 через прокси
+python download.py URL --mp3 --ru
+
+# Весь плейлист в MP3
+python download.py PLAYLIST_URL --mp3 --ru
+```
+
 ## Скачивание субтитров
 
-Скачивает субтитры (автоматические + ручные) в формате `.srt` без скачивания видео.
+Скачивает автоматические + ручные субтитры в `.srt` без скачивания видео.
 
 ```bash
 # Субтитры одного видео (русские)
@@ -63,9 +73,25 @@ python download.py PLAYLIST_URL --subs --ru
 
 # Субтитры всего канала
 python download.py https://www.youtube.com/@ChannelName --subs --ru
+```
 
-# В свою папку
-python download.py https://www.youtube.com/@ChannelName --subs --ru -o ./subs
+## Список видео канала
+
+Парсит канал или плейлист и сохраняет CSV с названиями и ссылками.
+
+```bash
+# Список видео канала
+python download.py https://www.youtube.com/@ChannelName --list --ru
+
+# Список видео плейлиста
+python download.py PLAYLIST_URL --list --ru
+```
+
+Создаёт файл `downloads/ChannelName.csv`:
+```
+title,url
+Название видео 1,https://www.youtube.com/watch?v=...
+Название видео 2,https://www.youtube.com/watch?v=...
 ```
 
 ## Настройка прокси (для РФ)
@@ -78,21 +104,29 @@ YTDL_PROXY=http://ip:port
 
 Флаг `--ru` подхватит прокси из `.env` автоматически. Также можно задать через переменную окружения `YTDL_PROXY`.
 
+## Параметры download.py
+
+| Параметр | Описание | По умолчанию |
+|----------|----------|--------------|
+| `url` | URL видео / плейлиста / канала | - |
+| `-q, --quality` | Качество видео: 720 или 1080 | 1080 |
+| `-o, --output` | Папка для сохранения | ./downloads |
+| `--mp3` | Скачать только аудио в MP3 | - |
+| `--subs` | Скачать только субтитры в .srt | - |
+| `--subs-lang` | Язык субтитров | ru |
+| `--list` | Список видео канала/плейлиста в CSV | - |
+| `--ru` | Прокси для РФ (из `YTDL_PROXY` / `.env`) | - |
+| `-p, --proxy` | Свой прокси-сервер | - |
+| `-c, --cookies` | Куки из браузера (chrome/firefox/edge) | - |
+
 ## Дублирование видео
 
 Автоматически транскрибирует, переводит на русский и озвучивает видео.
 
 ```bash
-# Базовое использование
 python dub_video.py video.mp4
-
-# С указанием выходного файла
 python dub_video.py video.mp4 -o video_ru.mp4
-
-# Быстрая модель Whisper (менее точная)
 python dub_video.py video.mp4 --whisper-model turbo
-
-# Сохранить транскрипцию с переводом
 python dub_video.py video.mp4 --save-transcript transcript.json
 ```
 
@@ -112,31 +146,11 @@ python dub_video.py video.mp4 --save-transcript transcript.json
 
 ### Конфигурация API
 
-API ключ можно передать через:
-- Аргумент: `--api-key YOUR_KEY`
-- Переменную окружения: `GLM_API_KEY`
-
 ```bash
 export GLM_API_KEY="your_key_here"
 export GLM_API_BASE="https://api.z.ai/api/coding/paas/v4"
 ```
 
-## Параметры
-
-### download.py
-| Параметр | Описание | По умолчанию |
-|----------|----------|--------------|
-| `url` | URL видео / плейлиста / канала | - |
-| `-q, --quality` | Качество: 720 или 1080 | 1080 |
-| `-o, --output` | Папка для сохранения | ./downloads |
-| `--mp3` | Скачать только аудио в MP3 | - |
-| `--ru` | Прокси для РФ (из `YTDL_PROXY` / `.env`) | - |
-| `-p, --proxy` | Свой прокси-сервер | - |
-| `-c, --cookies` | Куки из браузера (chrome/firefox/edge) | - |
-| `--subs` | Скачать только субтитры в .srt | - |
-| `--subs-lang` | Язык субтитров | ru |
-
-### dub_video.py
 | Параметр | Описание | По умолчанию |
 |----------|----------|--------------|
 | `video` | Путь к видео файлу | - |

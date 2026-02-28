@@ -21,6 +21,55 @@ if _env_path.exists():
 DEFAULT_PROXY = os.environ.get('YTDL_PROXY', '')
 
 
+def list_videos(url: str, output_dir: str = "./downloads", proxy: str = None):
+    """Парсит канал/плейлист и сохраняет список видео в CSV"""
+    import csv
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': 'in_playlist',
+        'ignoreerrors': True,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    }
+    if proxy:
+        opts['proxy'] = proxy
+
+    print(f"📋 Получаю список видео...")
+    print(f"🔗 URL: {url}")
+    if proxy:
+        print(f"🌐 Прокси: {proxy}")
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    title = info.get('title', 'videos')
+    entries = list(info.get('entries', []))
+
+    # Для каналов title может содержать " - Videos", убираем
+    clean_title = title.replace(' - Videos', '').replace(' - Видео', '').strip()
+    safe_title = "".join(c if c.isalnum() or c in ' .-_' else '_' for c in clean_title)
+    csv_path = output_path / f"{safe_title}.csv"
+
+    rows = []
+    for entry in entries:
+        vid_title = entry.get('title', '')
+        vid_id = entry.get('id', '')
+        vid_url = f"https://www.youtube.com/watch?v={vid_id}" if vid_id else entry.get('url', '')
+        if vid_title or vid_id:
+            rows.append((vid_title, vid_url))
+
+    with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
+        writer = csv.writer(f)
+        writer.writerow(['title', 'url'])
+        writer.writerows(rows)
+
+    print(f"\n✅ Сохранено {len(rows)} видео в {csv_path}")
+
+
 def download_video(url: str, quality: str = "1080", output_dir: str = "./downloads", mp3: bool = False, proxy: str = None, cookies_browser: str = None, subs: bool = False, subs_lang: str = "ru"):
     """
     Скачивает видео с YouTube в указанном качестве
@@ -38,9 +87,13 @@ def download_video(url: str, quality: str = "1080", output_dir: str = "./downloa
 
     # Базовые настройки для yt-dlp
     ydl_opts = {
-        'outtmpl': str(output_path / '%(playlist_index|)s%(playlist_index&. |)s%(title)s.%(ext)s'),
+        'outtmpl': str(output_path / '%(playlist_title|)s%(playlist_title&/|)s%(playlist_index|)s%(playlist_index&. |)s%(title)s.%(ext)s'),
         'quiet': False,
         'no_warnings': True,
+        'ignoreerrors': True,
+        'download_archive': str(output_path / '.archive.txt'),
+        'sleep_interval': 3,
+        'max_sleep_interval': 6,
         'progress_hooks': [progress_hook],
         'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
         'http_headers': {
@@ -140,6 +193,7 @@ def main():
   uv run python download.py URL --subs --ru                  # субтитры (ru)
   uv run python download.py URL --subs --subs-lang en --ru   # субтитры (en)
   uv run python download.py @CHANNEL --subs --ru             # субтитры всего канала
+  uv run python download.py @CHANNEL --list --ru             # список видео в CSV
 
 URL может быть видео, плейлистом или каналом:
   https://www.youtube.com/watch?v=VIDEO_ID
@@ -201,13 +255,22 @@ URL может быть видео, плейлистом или каналом:
         help='Язык субтитров (по умолчанию: ru)'
     )
 
+    parser.add_argument(
+        '--list',
+        action='store_true',
+        help='Сохранить список видео канала/плейлиста в CSV (название, ссылка)'
+    )
+
     args = parser.parse_args()
 
     proxy = args.proxy
     if args.ru:
         proxy = DEFAULT_PROXY
 
-    download_video(args.url, args.quality, args.output, args.mp3, proxy, args.cookies, args.subs, args.subs_lang)
+    if args.list:
+        list_videos(args.url, args.output, proxy)
+    else:
+        download_video(args.url, args.quality, args.output, args.mp3, proxy, args.cookies, args.subs, args.subs_lang)
 
 
 if __name__ == "__main__":
