@@ -130,7 +130,80 @@ def srt_to_text(srt_path: Path, chunk_minutes: int = 5) -> str:
     return '\n\n'.join(parts)
 
 
-def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, subs_lang: str = "ru", chunk_minutes: int = 5):
+def summarize_with_llm(txt_path: Path, output_dir: Path):
+    """Отправляет текстовый файл в LLM и сохраняет развёрнутые таймкоды"""
+    import json
+    import urllib.request
+    import urllib.error
+
+    api_key = os.environ.get('OPENROUTER_API_KEY', '')
+    if not api_key:
+        print("  ⚠️  OPENROUTER_API_KEY не задан в .env")
+        return
+
+    text = txt_path.read_text(encoding='utf-8')
+    if not text.strip():
+        return
+
+    summary_dir = output_dir / 'summaries'
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    out_file = summary_dir / txt_path.name
+
+    if out_file.exists():
+        print(f"  ⏭️  Уже есть: {out_file.name}")
+        return
+
+    prompt = f"""Ты — эксперт по анализу образовательных лекций. Тебе дана транскрипция лекции с YouTube, разбитая по временным блокам.
+
+Твоя задача — создать МАКСИМАЛЬНО ДЕТАЛЬНОЕ содержание лекции. Для КАЖДОГО смыслового блока (их должно быть много, не объединяй темы):
+
+1. **Таймкод** [ЧЧ:ММ] — точное время начала блока
+2. **Название темы** — чёткое и конкретное название раздела
+3. **Подробное описание** (5-10 предложений):
+   - Какие именно понятия/теоремы/формулы вводятся
+   - Какие примеры приводит лектор
+   - Какие выводы делаются
+   - Связь с предыдущими и последующими темами
+4. **Ключевые термины** — список основных терминов и определений из блока
+
+В конце добавь:
+- **Общее резюме лекции** (10-15 предложений)
+- **Полный список ключевых понятий и определений** введённых в лекции
+- **Рекомендации** — что нужно знать/повторить перед следующей лекцией
+
+Пиши на русском языке. Будь максимально точен в описании математических терминов, формул и определений. Не пропускай важные детали.
+
+Транскрипция:
+{text}"""
+
+    body = json.dumps({
+        'model': 'openai/gpt-4o-mini',
+        'messages': [{'role': 'user', 'content': prompt}],
+    }).encode()
+
+    req = urllib.request.Request(
+        'https://openrouter.ai/api/v1/chat/completions',
+        data=body,
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read())
+        content = result['choices'][0]['message']['content']
+        out_file.write_text(content, encoding='utf-8')
+        print(f"  🤖 {out_file.name}")
+    except urllib.error.HTTPError as e:
+        err = e.read().decode() if e.fp else str(e)
+        print(f"  ❌ LLM ошибка ({e.code}): {err[:200]}")
+    except Exception as e:
+        print(f"  ❌ LLM ошибка: {e}")
+
+
+def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, subs_lang: str = "ru", chunk_minutes: int = 5, summarize: bool = False):
     """Скачивает субтитры и конвертирует в чистый текст"""
     output_path = Path(output_dir)
     text_path = output_path / 'out-text'
@@ -168,6 +241,7 @@ def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, 
             ydl.download([url])
 
         # Конвертируем все скачанные SRT в текст
+        txt_files = []
         srt_files = sorted(tmp.glob(f'*.{subs_lang}.srt'))
         if not srt_files:
             print("⚠️  Субтитры не найдены")
@@ -183,11 +257,18 @@ def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, 
             text = srt_to_text(srt_file, chunk_minutes)
             if text:
                 txt_file.write_text(text, encoding='utf-8')
+                txt_files.append(txt_file)
                 print(f"  ✅ {txt_file.name}")
             else:
                 print(f"  ⚠️  Пустые субтитры: {srt_file.name}")
 
     print(f"\n✅ Тексты сохранены в {text_path}")
+
+    if summarize and txt_files:
+        print(f"\n🤖 Отправляю в LLM для анализа...")
+        for tf in txt_files:
+            summarize_with_llm(tf, output_path)
+        print(f"\n✅ Саммари сохранены в {output_path / 'summaries'}")
 
 
 def download_video(url: str, quality: str = "1080", output_dir: str = "./downloads", mp3: bool = False, proxy: str = None, cookies_browser: str = None, subs: bool = False, subs_lang: str = "ru"):
@@ -316,6 +397,7 @@ def main():
   uv run python download.py @CHANNEL --list --ru             # список видео в CSV
   uv run python download.py URL --text --ru                  # субтитры -> текст
   uv run python download.py URL1 URL2 --text --ru            # несколько URL сразу
+  uv run python download.py URL --text --summary --ru        # текст + анализ LLM
 
 URL может быть видео, плейлистом или каналом:
   https://www.youtube.com/watch?v=VIDEO_ID
@@ -397,6 +479,12 @@ URL может быть видео, плейлистом или каналом:
     )
 
     parser.add_argument(
+        '--summary',
+        action='store_true',
+        help='Отправить текст в LLM для создания таймкодов и описания лекции'
+    )
+
+    parser.add_argument(
         'extra_urls',
         nargs='*',
         help='Дополнительные URL для пакетной обработки'
@@ -415,7 +503,7 @@ URL может быть видео, плейлистом или каналом:
             list_videos(u, args.output, proxy)
     elif args.text:
         for u in urls:
-            download_text(u, args.output, proxy, args.subs_lang, args.chunk)
+            download_text(u, args.output, proxy, args.subs_lang, args.chunk, args.summary)
     else:
         for u in urls:
             download_video(u, args.quality, args.output, args.mp3, proxy, args.cookies, args.subs, args.subs_lang)

@@ -8,7 +8,7 @@ YouTube downloader tool built on yt-dlp. Downloads video, audio (MP3), subtitles
 
 - `download.py` — main CLI tool (video/audio/subs/list download)
 - `dub_video.py` — video dubbing pipeline (Whisper + GLM + Qwen3-TTS)
-- `.env` — local proxy config (YTDL_PROXY), gitignored
+- `.env` — local config (YTDL_PROXY, OPENROUTER_API_KEY), gitignored
 
 ## Architecture
 
@@ -20,6 +20,9 @@ YouTube downloader tool built on yt-dlp. Downloads video, audio (MP3), subtitles
 - `--text` mode: SRT -> temp dir -> convert to .txt -> `out-text/` subfolder
 - SRT-to-text: deduplicates YouTube auto-sub lines, strips HTML tags, chunks by N minutes
 - Multiple URLs supported via positional args (url + extra_urls)
+- `--summary` mode: sends text files to OpenRouter LLM (GPT-4o-mini) for lecture analysis
+- LLM output saved to `summaries/` subfolder, skips already processed files
+- API keys (OPENROUTER_API_KEY) read from .env, never committed
 
 ## Commands
 
@@ -30,6 +33,7 @@ uv run python download.py URL --subs --ru        # subtitles (.srt)
 uv run python download.py URL --text --ru        # subtitles -> plain text (.txt)
 uv run python download.py URL --list --ru        # CSV list
 uv run python download.py URL1 URL2 --text --ru  # multiple URLs
+uv run python download.py URL --text --summary --ru  # text + LLM analysis
 ```
 
 ## Conventions
