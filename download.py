@@ -207,67 +207,77 @@ def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, 
     """Скачивает субтитры и конвертирует в чистый текст"""
     output_path = Path(output_dir)
     text_path = output_path / 'out-text'
+    srt_cache = output_path / 'srt-cache'
     text_path.mkdir(parents=True, exist_ok=True)
+    srt_cache.mkdir(parents=True, exist_ok=True)
 
-    # Сначала скачиваем SRT в temp
-    import tempfile
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp = Path(tmpdir)
-        ydl_opts = {
-            'outtmpl': str(tmp / '%(playlist_index|)s%(playlist_index&. |)s%(title)s.%(ext)s'),
-            'quiet': False,
-            'no_warnings': True,
-            'ignoreerrors': True,
-            'sleep_interval': 3,
-            'max_sleep_interval': 6,
-            'skip_download': True,
-            'writeautomaticsub': True,
-            'writesubtitles': True,
-            'subtitleslangs': [subs_lang],
-            'subtitlesformat': 'srt',
-            'postprocessors': [{'key': 'FFmpegSubtitlesConvertor', 'format': 'srt'}],
-            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-        }
-        if proxy:
-            ydl_opts['proxy'] = proxy
+    # Скачиваем SRT в persistent cache (download_archive пропускает уже скачанные)
+    ydl_opts = {
+        'outtmpl': str(srt_cache / '%(playlist_index|)s%(playlist_index&. |)s%(title)s.%(ext)s'),
+        'quiet': False,
+        'no_warnings': True,
+        'ignoreerrors': True,
+        'sleep_interval': 3,
+        'max_sleep_interval': 6,
+        'download_archive': str(srt_cache / '.archive.txt'),
+        'skip_download': True,
+        'writeautomaticsub': True,
+        'writesubtitles': True,
+        'subtitleslangs': [subs_lang],
+        'subtitlesformat': 'srt',
+        'postprocessors': [{'key': 'FFmpegSubtitlesConvertor', 'format': 'srt'}],
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    }
+    if proxy:
+        ydl_opts['proxy'] = proxy
 
-        print(f"📝 Скачиваю субтитры и конвертирую в текст...")
-        print(f"🔗 URL: {url}")
-        if proxy:
-            print(f"🌐 Прокси: {proxy}")
-        print(f"📁 Сохранение в: {text_path.absolute()}\n")
+    print(f"📝 Скачиваю субтитры и конвертирую в текст...")
+    print(f"🔗 URL: {url}")
+    if proxy:
+        print(f"🌐 Прокси: {proxy}")
+    print(f"📁 Сохранение в: {text_path.absolute()}\n")
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
 
-        # Конвертируем все скачанные SRT в текст
-        txt_files = []
-        srt_files = sorted(tmp.glob(f'*.{subs_lang}.srt'))
-        if not srt_files:
-            print("⚠️  Субтитры не найдены")
-            return
+    # Конвертируем все SRT из кэша в текст (пропускаем уже готовые .txt)
+    txt_files = []
+    srt_files = sorted(srt_cache.glob(f'*.{subs_lang}.srt'))
+    if not srt_files:
+        print("⚠️  Субтитры не найдены")
+        return
 
-        for srt_file in srt_files:
-            # Имя без языкового суффикса
-            name = srt_file.stem
-            if name.endswith(f'.{subs_lang}'):
-                name = name[:-len(f'.{subs_lang}')]
-            txt_file = text_path / f"{name}.txt"
+    for srt_file in srt_files:
+        name = srt_file.stem
+        if name.endswith(f'.{subs_lang}'):
+            name = name[:-len(f'.{subs_lang}')]
+        txt_file = text_path / f"{name}.txt"
 
-            text = srt_to_text(srt_file, chunk_minutes)
-            if text:
-                txt_file.write_text(text, encoding='utf-8')
-                txt_files.append(txt_file)
-                print(f"  ✅ {txt_file.name}")
-            else:
-                print(f"  ⚠️  Пустые субтитры: {srt_file.name}")
+        if txt_file.exists():
+            print(f"  ⏭️  Уже есть: {txt_file.name}")
+            txt_files.append(txt_file)
+            continue
+
+        text = srt_to_text(srt_file, chunk_minutes)
+        if text:
+            txt_file.write_text(text, encoding='utf-8')
+            txt_files.append(txt_file)
+            print(f"  ✅ {txt_file.name}")
+        else:
+            print(f"  ⚠️  Пустые субтитры: {srt_file.name}")
 
     print(f"\n✅ Тексты сохранены в {text_path}")
 
     if summarize and txt_files:
-        print(f"\n🤖 Отправляю в LLM для анализа...")
-        for tf in txt_files:
-            summarize_with_llm(tf, output_path)
+        import concurrent.futures
+        print(f"\n🤖 Отправляю в LLM для анализа ({len(txt_files)} файлов, 20 воркеров)...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
+            futures = {pool.submit(summarize_with_llm, tf, output_path): tf for tf in txt_files}
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"  ❌ Ошибка воркера: {e}")
         print(f"\n✅ Саммари сохранены в {output_path / 'summaries'}")
 
 
