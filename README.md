@@ -179,47 +179,6 @@ OPENROUTER_API_KEY=sk-or-v1-...
 | `--summary` | LLM-анализ лекции (таймкоды + описание) | - |
 | `extra_urls` | Дополнительные URL через пробел | - |
 
-## Дублирование видео
-
-Автоматически транскрибирует, переводит на русский и озвучивает видео.
-
-```bash
-python dub_video.py video.mp4
-python dub_video.py video.mp4 -o video_ru.mp4
-python dub_video.py video.mp4 --whisper-model turbo
-python dub_video.py video.mp4 --save-transcript transcript.json
-```
-
-### Pipeline дублирования
-
-1. **FFmpeg** - извлечение аудио из видео
-2. **Whisper Large-V3-Turbo** - транскрипция (локально)
-3. **GLM 4.7 API** - перевод на русский
-4. **Qwen3-TTS** - синтез русской речи (локально, GPU)
-5. **FFmpeg** - сборка финального видео
-
-### Требования для дублирования
-
-- NVIDIA GPU с CUDA (рекомендуется 8GB+ VRAM)
-- ~10GB для моделей Whisper + Qwen3-TTS
-- FFmpeg в PATH
-
-### Конфигурация API
-
-```bash
-export GLM_API_KEY="your_key_here"
-export GLM_API_BASE="https://api.z.ai/api/coding/paas/v4"
-```
-
-| Параметр | Описание | По умолчанию |
-|----------|----------|--------------|
-| `video` | Путь к видео файлу | - |
-| `-o, --output` | Выходной файл | video_dubbed.mp4 |
-| `--whisper-model` | Модель Whisper | large-v3-turbo |
-| `--save-transcript` | Сохранить транскрипцию | - |
-| `--api-key` | API ключ GLM | env |
-| `--api-base` | URL API GLM | env |
-
 ## Лицензия
 
 MIT. Соблюдайте авторские права при скачивании контента.

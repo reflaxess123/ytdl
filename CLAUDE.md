@@ -6,8 +6,7 @@ YouTube downloader tool built on yt-dlp. Downloads video, audio (MP3), subtitles
 
 ## Key files
 
-- `download.py` — main CLI tool (video/audio/subs/list download)
-- `dub_video.py` — video dubbing pipeline (Whisper + GLM + Qwen3-TTS)
+- `download.py` — main CLI tool (video/audio/subs/list/text/summary)
 - `.env` — local config (YTDL_PROXY, OPENROUTER_API_KEY), gitignored
 
 ## Architecture
@@ -17,11 +16,12 @@ YouTube downloader tool built on yt-dlp. Downloads video, audio (MP3), subtitles
 - `DEFAULT_PROXY` read from `YTDL_PROXY` env var
 - Downloads go to `./downloads/` with playlist subdirectories
 - `.archive.txt` tracks downloaded video IDs to skip on re-run
-- `--text` mode: SRT -> temp dir -> convert to .txt -> `out-text/` subfolder
+- `--text` mode: SRT -> persistent `srt-cache/` dir -> convert to .txt -> `out-text/` subfolder
 - SRT-to-text: deduplicates YouTube auto-sub lines, strips HTML tags, chunks by N minutes
 - Multiple URLs supported via positional args (url + extra_urls)
 - `--summary` mode: sends text files to OpenRouter LLM (GPT-4o-mini) for lecture analysis
 - LLM output saved to `summaries/` subfolder, skips already processed files
+- 20 parallel workers (ThreadPoolExecutor) for LLM summary requests
 - API keys (OPENROUTER_API_KEY) read from .env, never committed
 
 ## Commands
@@ -41,4 +41,4 @@ uv run python download.py URL --text --summary --ru  # text + LLM analysis
 - Language: Russian for user-facing text, English for code/comments
 - Run with: `uv run python download.py`
 - Proxy IP must never be committed — always read from .env/env var
-- `.gitignore` excludes: downloads/, .venv/, .env, __pycache__, transcript.json, tts_output.log
+- `.gitignore` excludes: downloads/, .venv/, .env, __pycache__
