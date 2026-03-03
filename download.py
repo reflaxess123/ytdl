@@ -203,15 +203,43 @@ def summarize_with_llm(txt_path: Path, output_dir: Path):
         print(f"  ❌ LLM ошибка: {e}")
 
 
+def _safe_dirname(name: str) -> str:
+    """Sanitize string for use as directory name"""
+    return "".join(c if c.isalnum() or c in ' .-_' else '_' for c in name).strip()
+
+
 def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, subs_lang: str = "ru", chunk_minutes: int = 5, summarize: bool = False):
     """Скачивает субтитры и конвертирует в чистый текст"""
     output_path = Path(output_dir)
-    text_path = output_path / 'out-text'
-    srt_cache = output_path / 'srt-cache'
-    text_path.mkdir(parents=True, exist_ok=True)
-    srt_cache.mkdir(parents=True, exist_ok=True)
 
-    # Скачиваем SRT в persistent cache (download_archive пропускает уже скачанные)
+    # Get playlist/video title for per-playlist subdirectory
+    meta_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': 'in_playlist',
+        'ignoreerrors': True,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    }
+    if proxy:
+        meta_opts['proxy'] = proxy
+
+    with yt_dlp.YoutubeDL(meta_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    playlist_title = info.get('title', '') if info else ''
+    playlist_title = playlist_title.replace(' - Videos', '').replace(' - Видео', '').strip()
+
+    if playlist_title:
+        base = output_path / _safe_dirname(playlist_title)
+    else:
+        base = output_path
+
+    srt_cache = base / 'srt-cache'
+    text_path = base / 'out-text'
+    srt_cache.mkdir(parents=True, exist_ok=True)
+    text_path.mkdir(parents=True, exist_ok=True)
+
+    # Download SRT to persistent cache
     ydl_opts = {
         'outtmpl': str(srt_cache / '%(playlist_index|)s%(playlist_index&. |)s%(title)s.%(ext)s'),
         'quiet': False,
@@ -231,16 +259,18 @@ def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, 
     if proxy:
         ydl_opts['proxy'] = proxy
 
-    print(f"📝 Скачиваю субтитры и конвертирую в текст...")
+    print(f"\n📝 Скачиваю субтитры и конвертирую в текст...")
+    if playlist_title:
+        print(f"📋 Плейлист: {playlist_title}")
     print(f"🔗 URL: {url}")
     if proxy:
         print(f"🌐 Прокси: {proxy}")
-    print(f"📁 Сохранение в: {text_path.absolute()}\n")
+    print(f"📁 Папка: {base.absolute()}\n")
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
 
-    # Конвертируем все SRT из кэша в текст (пропускаем уже готовые .txt)
+    # Convert SRT -> text (skip existing .txt)
     txt_files = []
     srt_files = sorted(srt_cache.glob(f'*.{subs_lang}.srt'))
     if not srt_files:
@@ -270,15 +300,29 @@ def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, 
 
     if summarize and txt_files:
         import concurrent.futures
+        summary_dir = base / 'summaries'
+        summary_dir.mkdir(parents=True, exist_ok=True)
         print(f"\n🤖 Отправляю в LLM для анализа ({len(txt_files)} файлов, 20 воркеров)...")
         with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
-            futures = {pool.submit(summarize_with_llm, tf, output_path): tf for tf in txt_files}
+            futures = {pool.submit(summarize_with_llm, tf, base): tf for tf in txt_files}
             for future in concurrent.futures.as_completed(futures):
                 try:
                     future.result()
                 except Exception as e:
                     print(f"  ❌ Ошибка воркера: {e}")
-        print(f"\n✅ Саммари сохранены в {output_path / 'summaries'}")
+
+        # Concatenate all summaries into one file
+        all_summaries = sorted(summary_dir.glob('*.txt'))
+        if all_summaries:
+            merged_name = f"{_safe_dirname(playlist_title)}_ALL.txt" if playlist_title else "ALL_SUMMARIES.txt"
+            merged_path = base / merged_name
+            parts = []
+            for sf in all_summaries:
+                parts.append(f"{'='*60}\n{sf.stem}\n{'='*60}\n\n{sf.read_text(encoding='utf-8')}")
+            merged_path.write_text('\n\n\n'.join(parts), encoding='utf-8')
+            print(f"\n📄 Все саммари склеены в: {merged_path.name}")
+
+        print(f"✅ Саммари сохранены в {summary_dir}")
 
 
 def download_video(url: str, quality: str = "1080", output_dir: str = "./downloads", mp3: bool = False, proxy: str = None, cookies_browser: str = None, subs: bool = False, subs_lang: str = "ru"):
