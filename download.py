@@ -203,12 +203,87 @@ def summarize_with_llm(txt_path: Path, output_dir: Path):
         print(f"  ❌ LLM ошибка: {e}")
 
 
+def summarize_with_gemini(txt_path: Path, output_dir: Path, proxy: str = None):
+    """Отправляет текстовый файл в Gemini 3.1 Pro и сохраняет развёрнутые таймкоды"""
+    import json
+    import urllib.request
+    import urllib.error
+
+    api_key = os.environ.get('GEMINI_API_KEY', '')
+    if not api_key:
+        print("  ⚠️  GEMINI_API_KEY не задан в .env")
+        return
+
+    text = txt_path.read_text(encoding='utf-8')
+    if not text.strip():
+        return
+
+    summary_dir = output_dir / 'summaries'
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    out_file = summary_dir / txt_path.name
+
+    if out_file.exists():
+        print(f"  ⏭️  Уже есть: {out_file.name}")
+        return
+
+    prompt = f"""Ты — эксперт по анализу образовательных лекций. Тебе дана транскрипция лекции с YouTube, разбитая по временным блокам.
+
+Твоя задача — создать МАКСИМАЛЬНО ДЕТАЛЬНОЕ содержание лекции. Для КАЖДОГО смыслового блока (их должно быть много, не объединяй темы):
+
+1. **Таймкод** [ЧЧ:ММ] — точное время начала блока
+2. **Название темы** — чёткое и конкретное название раздела
+3. **Подробное описание** (5-10 предложений):
+   - Какие именно понятия/теоремы/формулы вводятся
+   - Какие примеры приводит лектор
+   - Какие выводы делаются
+   - Связь с предыдущими и последующими темами
+4. **Ключевые термины** — список основных терминов и определений из блока
+
+В конце добавь:
+- **Общее резюме лекции** (10-15 предложений)
+- **Полный список ключевых понятий и определений** введённых в лекции
+- **Рекомендации** — что нужно знать/повторить перед следующей лекцией
+
+Пиши на русском языке. Будь максимально точен в описании математических терминов, формул и определений. Не пропускай важные детали.
+
+Транскрипция:
+{text}"""
+
+    body = json.dumps({
+        'contents': [{'parts': [{'text': prompt}]}],
+    }).encode()
+
+    url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key={api_key}'
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={'Content-Type': 'application/json'},
+    )
+
+    try:
+        if proxy:
+            proxy_handler = urllib.request.ProxyHandler({'https': proxy, 'http': proxy})
+            opener = urllib.request.build_opener(proxy_handler)
+        else:
+            opener = urllib.request.build_opener()
+        with opener.open(req, timeout=180) as resp:
+            result = json.loads(resp.read())
+        content = result['candidates'][0]['content']['parts'][0]['text']
+        out_file.write_text(content, encoding='utf-8')
+        print(f"  🤖 {out_file.name}")
+    except urllib.error.HTTPError as e:
+        err = e.read().decode() if e.fp else str(e)
+        print(f"  ❌ Gemini ошибка ({e.code}): {err[:200]}")
+    except Exception as e:
+        print(f"  ❌ Gemini ошибка: {e}")
+
+
 def _safe_dirname(name: str) -> str:
     """Sanitize string for use as directory name"""
     return "".join(c if c.isalnum() or c in ' .-_' else '_' for c in name).strip()
 
 
-def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, subs_lang: str = "ru", chunk_minutes: int = 5, summarize: bool = False):
+def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, subs_lang: str = "ru", chunk_minutes: int = 5, summarize: bool = False, use_gemini: bool = False):
     """Скачивает субтитры и конвертирует в чистый текст"""
     output_path = Path(output_dir)
 
@@ -302,9 +377,11 @@ def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, 
         import concurrent.futures
         summary_dir = base / 'summaries'
         summary_dir.mkdir(parents=True, exist_ok=True)
-        print(f"\n🤖 Отправляю в LLM для анализа ({len(txt_files)} файлов, 20 воркеров)...")
+        summarize_fn = summarize_with_gemini if use_gemini else summarize_with_llm
+        provider = "Gemini 3.1 Pro" if use_gemini else "OpenRouter GPT-4o-mini"
+        print(f"\n🤖 Отправляю в {provider} для анализа ({len(txt_files)} файлов, 20 воркеров)...")
         with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
-            futures = {pool.submit(summarize_with_llm, tf, base): tf for tf in txt_files}
+            futures = {pool.submit(summarize_fn, tf, base, *([proxy] if use_gemini else [])): tf for tf in txt_files}
             for future in concurrent.futures.as_completed(futures):
                 try:
                     future.result()
@@ -539,6 +616,12 @@ URL может быть видео, плейлистом или каналом:
     )
 
     parser.add_argument(
+        '--gemini',
+        action='store_true',
+        help='Использовать Gemini 3.1 Pro вместо OpenRouter для --summary'
+    )
+
+    parser.add_argument(
         'extra_urls',
         nargs='*',
         help='Дополнительные URL для пакетной обработки'
@@ -557,7 +640,7 @@ URL может быть видео, плейлистом или каналом:
             list_videos(u, args.output, proxy)
     elif args.text:
         for u in urls:
-            download_text(u, args.output, proxy, args.subs_lang, args.chunk, args.summary)
+            download_text(u, args.output, proxy, args.subs_lang, args.chunk, args.summary, args.gemini)
     else:
         for u in urls:
             download_video(u, args.quality, args.output, args.mp3, proxy, args.cookies, args.subs, args.subs_lang)
