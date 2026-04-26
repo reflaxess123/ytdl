@@ -284,7 +284,7 @@ def _safe_dirname(name: str) -> str:
 
 
 def download_descriptions(url: str, output_dir: str = "./downloads", proxy: str = None):
-    """Скачивает описания видео в out-desc/*.txt"""
+    """Сохраняет описания видео сразу в out-desc/*.txt"""
     output_path = Path(output_dir)
 
     meta_opts = {
@@ -311,20 +311,8 @@ def download_descriptions(url: str, output_dir: str = "./downloads", proxy: str 
     desc_path = base / 'out-desc'
     desc_path.mkdir(parents=True, exist_ok=True)
 
-    ydl_opts = {
-        'outtmpl': str(desc_path / '%(playlist_index|)s%(playlist_index&. |)s%(title)s.%(ext)s'),
-        'quiet': False,
-        'no_warnings': True,
-        'ignoreerrors': True,
-        'sleep_interval': 3,
-        'max_sleep_interval': 6,
-        'download_archive': str(desc_path / '.archive.txt'),
-        'skip_download': True,
-        'writedescription': True,
-        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-    }
-    if proxy:
-        ydl_opts['proxy'] = proxy
+    is_playlist = info.get('_type') == 'playlist'
+    entries = list(info.get('entries') or [info])
 
     print(f"\n📝 Скачиваю описания видео...")
     if playlist_title:
@@ -334,24 +322,48 @@ def download_descriptions(url: str, output_dir: str = "./downloads", proxy: str 
         print(f"🌐 Прокси: {proxy}")
     print(f"📁 Папка: {base.absolute()}\n")
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    fetch_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
+        'ignoreerrors': True,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    }
+    if proxy:
+        fetch_opts['proxy'] = proxy
 
-    # Переименовываем .description -> .txt
-    renamed = 0
-    for df in desc_path.glob('*.description'):
-        txt_file = df.with_suffix('.txt')
-        if txt_file.exists():
-            df.unlink()
-            continue
-        df.rename(txt_file)
-        renamed += 1
-        print(f"  ✅ {txt_file.name}")
+    saved = 0
+    skipped = 0
+    with yt_dlp.YoutubeDL(fetch_opts) as ydl:
+        for i, entry in enumerate(entries, 1):
+            if not entry:
+                continue
+            video_id = entry.get('id')
+            if not video_id:
+                continue
 
-    if renamed == 0:
-        print("  ⏭️  Новых описаний нет")
+            title = entry.get('title') or f'video_{video_id}'
+            safe = _safe_dirname(title)
+            prefix = f'{i}. ' if is_playlist else ''
+            out_file = desc_path / f'{prefix}{safe}.txt'
 
-    print(f"\n✅ Описания сохранены в {desc_path}")
+            if out_file.exists():
+                skipped += 1
+                continue
+
+            try:
+                full = ydl.extract_info(f'https://www.youtube.com/watch?v={video_id}', download=False)
+                desc = (full.get('description') or '').strip() if full else ''
+                if desc:
+                    out_file.write_text(desc, encoding='utf-8')
+                    saved += 1
+                    print(f"  ✅ {out_file.name}")
+                else:
+                    print(f"  ⚠️  Пустое описание: {out_file.name}")
+            except Exception as e:
+                print(f"  ❌ {out_file.name}: {e}")
+
+    print(f"\n✅ Описаний сохранено: {saved}, пропущено (уже есть): {skipped} в {desc_path}")
 
 
 def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, subs_lang: str = "ru", chunk_minutes: int = 5, summarize: bool = False, use_gemini: bool = False):
