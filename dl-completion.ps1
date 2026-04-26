@@ -12,6 +12,7 @@ Register-ArgumentCompleter -CommandName dl -ScriptBlock {
         @{Name='--mp3';       Tip='Скачать аудио MP3'}
         @{Name='--subs';      Tip='Скачать субтитры .srt'}
         @{Name='--text';      Tip='Субтитры -> чистый текст'}
+        @{Name='--desc';      Tip='Описания видео -> текст'}
         @{Name='--list';      Tip='Список видео в CSV'}
         @{Name='--summary';   Tip='LLM-анализ лекции'}
         @{Name='--gemini';    Tip='Gemini 3.1 Pro вместо OpenRouter'}

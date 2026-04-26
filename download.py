@@ -283,6 +283,77 @@ def _safe_dirname(name: str) -> str:
     return "".join(c if c.isalnum() or c in ' .-_' else '_' for c in name).strip()
 
 
+def download_descriptions(url: str, output_dir: str = "./downloads", proxy: str = None):
+    """Скачивает описания видео в out-desc/*.txt"""
+    output_path = Path(output_dir)
+
+    meta_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': 'in_playlist',
+        'ignoreerrors': True,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    }
+    if proxy:
+        meta_opts['proxy'] = proxy
+
+    with yt_dlp.YoutubeDL(meta_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    playlist_title = info.get('title', '') if info else ''
+    playlist_title = playlist_title.replace(' - Videos', '').replace(' - Видео', '').strip()
+
+    if playlist_title:
+        base = output_path / _safe_dirname(playlist_title)
+    else:
+        base = output_path
+
+    desc_path = base / 'out-desc'
+    desc_path.mkdir(parents=True, exist_ok=True)
+
+    ydl_opts = {
+        'outtmpl': str(desc_path / '%(playlist_index|)s%(playlist_index&. |)s%(title)s.%(ext)s'),
+        'quiet': False,
+        'no_warnings': True,
+        'ignoreerrors': True,
+        'sleep_interval': 3,
+        'max_sleep_interval': 6,
+        'download_archive': str(desc_path / '.archive.txt'),
+        'skip_download': True,
+        'writedescription': True,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    }
+    if proxy:
+        ydl_opts['proxy'] = proxy
+
+    print(f"\n📝 Скачиваю описания видео...")
+    if playlist_title:
+        print(f"📋 Плейлист: {playlist_title}")
+    print(f"🔗 URL: {url}")
+    if proxy:
+        print(f"🌐 Прокси: {proxy}")
+    print(f"📁 Папка: {base.absolute()}\n")
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+
+    # Переименовываем .description -> .txt
+    renamed = 0
+    for df in desc_path.glob('*.description'):
+        txt_file = df.with_suffix('.txt')
+        if txt_file.exists():
+            df.unlink()
+            continue
+        df.rename(txt_file)
+        renamed += 1
+        print(f"  ✅ {txt_file.name}")
+
+    if renamed == 0:
+        print("  ⏭️  Новых описаний нет")
+
+    print(f"\n✅ Описания сохранены в {desc_path}")
+
+
 def download_text(url: str, output_dir: str = "./downloads", proxy: str = None, subs_lang: str = "ru", chunk_minutes: int = 5, summarize: bool = False, use_gemini: bool = False):
     """Скачивает субтитры и конвертирует в чистый текст"""
     output_path = Path(output_dir)
@@ -527,6 +598,7 @@ def main():
   uv run python download.py @CHANNEL --subs --ru             # субтитры всего канала
   uv run python download.py @CHANNEL --list --ru             # список видео в CSV
   uv run python download.py URL --text --ru                  # субтитры -> текст
+  uv run python download.py URL --desc --ru                  # описания -> текст
   uv run python download.py URL1 URL2 --text --ru            # несколько URL сразу
   uv run python download.py URL --text --summary --ru        # текст + анализ LLM
 
@@ -603,6 +675,12 @@ URL может быть видео, плейлистом или каналом:
     )
 
     parser.add_argument(
+        '--desc',
+        action='store_true',
+        help='Скачать описания видео в текст (out-desc/*.txt)'
+    )
+
+    parser.add_argument(
         '--chunk',
         type=int,
         default=5,
@@ -641,6 +719,9 @@ URL может быть видео, плейлистом или каналом:
     elif args.text:
         for u in urls:
             download_text(u, args.output, proxy, args.subs_lang, args.chunk, args.summary, args.gemini)
+    elif args.desc:
+        for u in urls:
+            download_descriptions(u, args.output, proxy)
     else:
         for u in urls:
             download_video(u, args.quality, args.output, args.mp3, proxy, args.cookies, args.subs, args.subs_lang)
